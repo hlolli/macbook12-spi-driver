@@ -466,11 +466,15 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 
 static int appleals_config_iio(struct appleals_device *als_dev)
 {
-	struct iio_dev *iio_dev = iio_priv_to_dev(als_dev);
+        struct iio_dev *iio_dev;
 	struct iio_trigger *iio_trig;
 	struct device *parent = &als_dev->hid_dev->dev;
 	int rc;
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+	iio_dev = iio_device_alloc(sizeof(als_dev));
+#else
+	iio_dev = iio_device_alloc(&als_dev->hid_dev->dev, sizeof(als_dev));
+#endif
 	iio_dev->channels = appleals_channels;
 	iio_dev->num_channels = ARRAY_SIZE(appleals_channels);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
@@ -545,9 +549,9 @@ static int appleals_probe(struct hid_device *hdev,
 
 	/* initialize device */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
-	iio_dev = devm_iio_device_alloc(&hdev->dev, sizeof(*als_dev));
+	iio_dev = iio_device_alloc(sizeof(*als_dev));
 #else
-        iio_dev = iio_device_alloc(&als_dev->hid_dev->dev, sizeof(als_dev));
+        iio_dev = iio_device_alloc(&hdev->dev, sizeof(*als_dev));
 #endif
         if (!iio_dev)
               return -ENOMEM;
