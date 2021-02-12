@@ -49,6 +49,7 @@
 #include <linux/iio/trigger.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #include "apple-ibridge.h"
 
@@ -472,8 +473,10 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 
 	iio_dev->channels = appleals_channels;
 	iio_dev->num_channels = ARRAY_SIZE(appleals_channels);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 	iio_dev->dev.parent = parent;
-	iio_dev->info = &appleals_info;
+#endif
+        iio_dev->info = &appleals_info;
 	iio_dev->name = "als";
 	iio_dev->modes = INDIO_DIRECT_MODE;
 
@@ -481,9 +484,9 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 					     &iio_pollfunc_store_time, NULL,
 					     NULL);
 	if (rc) {
-		hid_err(als_dev->hid_dev,
-			"Failed to set up iio triggered buffer: %d\n", rc);
-		return rc;
+          hid_err(als_dev->hid_dev,
+                  "Failed to set up iio triggered buffer: %d\n", rc);
+          return rc;
 	}
 
 	iio_trig = devm_iio_trigger_alloc(parent, "%s-dev%d", iio_dev->name,
@@ -541,9 +544,13 @@ static int appleals_probe(struct hid_device *hdev,
 	hid_dbg(hdev, "Found ambient light sensor\n");
 
 	/* initialize device */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 	iio_dev = devm_iio_device_alloc(&hdev->dev, sizeof(*als_dev));
-	if (!iio_dev)
-		return -ENOMEM;
+#else
+        iio_dev = iio_device_alloc(&als_dev->hid_dev->dev, sizeof(als_dev));
+#endif
+        if (!iio_dev)
+              return -ENOMEM;
 
 	als_dev = iio_priv(iio_dev);
 
