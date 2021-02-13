@@ -287,7 +287,8 @@ static int appleals_read_raw(struct iio_dev *iio_dev,
 			     struct iio_chan_spec const *chan,
 			     int *val, int *val2, long mask)
 {
-	struct appleals_device *als_dev = iio_priv(iio_dev);
+	struct appleals_device **priv = iio_priv(iio_dev);
+	struct appleals_device *als_dev = *priv;
 	__s32 value;
 	int rc;
 
@@ -335,7 +336,8 @@ static int appleals_write_raw(struct iio_dev *iio_dev,
 			      struct iio_chan_spec const *chan,
 			      int val, int val2, long mask)
 {
-	struct appleals_device *als_dev = iio_priv(iio_dev);
+	struct appleals_device **priv = iio_priv(iio_dev);
+	struct appleals_device *als_dev = *priv;
 	__s32 illum;
 	int rc;
 
