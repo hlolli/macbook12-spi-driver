@@ -57,10 +57,13 @@
 #define APPLEALS_DEF_CHANGE_SENS	APPLEALS_DYN_SENS
 
 struct appleals_device {
+	struct appleib_device	*ib_dev;
+	struct device		*log_dev;
 	struct hid_device	*hid_dev;
 	struct hid_report	*cfg_report;
 	struct hid_field	*illum_field;
 	struct iio_dev		*iio_dev;
+	struct iio_trigger	*iio_trig;
 	int			cur_sensitivity;
 	int			cur_hysteresis;
 	bool			events_enabled;
@@ -468,60 +471,80 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 
 static int appleals_config_iio(struct appleals_device *als_dev)
 {
-        struct iio_dev *iio_dev;
+	struct iio_dev *iio_dev;
 	struct iio_trigger *iio_trig;
-	struct device *parent = &als_dev->hid_dev->dev;
+	struct appleals_device **priv;
 	int rc;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 	iio_dev = iio_device_alloc(sizeof(als_dev));
 #else
 	iio_dev = iio_device_alloc(&als_dev->hid_dev->dev, sizeof(als_dev));
 #endif
+	if (!iio_dev)
+		return -ENOMEM;
+
+	priv = iio_priv(iio_dev);
+	*priv = als_dev;
+
 	iio_dev->channels = appleals_channels;
 	iio_dev->num_channels = ARRAY_SIZE(appleals_channels);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
-	iio_dev->dev.parent = parent;
+	iio_dev->dev.parent = &als_dev->hid_dev->dev;
 #endif
-        iio_dev->info = &appleals_info;
+	iio_dev->info = &appleals_info;
 	iio_dev->name = "als";
 	iio_dev->modes = INDIO_DIRECT_MODE;
 
-	rc = devm_iio_triggered_buffer_setup(parent, iio_dev,
-					     &iio_pollfunc_store_time, NULL,
-					     NULL);
+	rc = iio_triggered_buffer_setup(iio_dev, &iio_pollfunc_store_time, NULL,
+					NULL);
 	if (rc) {
-          hid_err(als_dev->hid_dev,
-                  "Failed to set up iio triggered buffer: %d\n", rc);
-          return rc;
+		hid_err(als_dev->hid_dev,
+			"Failed to set up iio triggered buffer: %d\n", rc);
+		goto free_iio_dev;
 	}
 
-	iio_trig = devm_iio_trigger_alloc(parent, "%s-dev%d", iio_dev->name,
-					  iio_dev->id);
-	if (!iio_trig)
-		return -ENOMEM;
+	iio_trig = iio_trigger_alloc("%s-dev%d", iio_dev->name, iio_dev->id);
+	if (!iio_trig) {
+		rc = -ENOMEM;
+		goto clean_trig_buf;
+	}
 
-	iio_trig->dev.parent = parent;
+	iio_trig->dev.parent = &als_dev->hid_dev->dev;
 	iio_trig->ops = &appleals_trigger_ops;
 	iio_trigger_set_drvdata(iio_trig, als_dev);
 
-	rc = devm_iio_trigger_register(parent, iio_trig);
+	rc = iio_trigger_register(iio_trig);
 	if (rc) {
 		hid_err(als_dev->hid_dev,
 			"Failed to register iio trigger: %d\n",
 			rc);
-		return rc;
+		goto free_iio_trig;
 	}
 
-	rc = devm_iio_device_register(parent, iio_dev);
+	als_dev->iio_trig = iio_trig;
+
+	rc = iio_device_register(iio_dev);
 	if (rc) {
 		hid_err(als_dev->hid_dev, "Failed to register iio device: %d\n",
 			rc);
-		return rc;
+		goto unreg_iio_trig;
 	}
 
 	als_dev->iio_dev = iio_dev;
 
 	return 0;
+
+unreg_iio_trig:
+	iio_trigger_unregister(iio_trig);
+free_iio_trig:
+	iio_trigger_free(iio_trig);
+	als_dev->iio_trig = NULL;
+clean_trig_buf:
+	iio_triggered_buffer_cleanup(iio_dev);
+free_iio_dev:
+	iio_device_free(iio_dev);
+
+	return rc;
 }
 
 static int appleals_probe(struct hid_device *hdev,
@@ -586,6 +609,23 @@ static int appleals_probe(struct hid_device *hdev,
 	return hid_hw_open(hdev);
 }
 
+static void appleals_remove(struct hid_device *hdev)
+{
+	struct appleals_device *als_dev =
+		appleib_get_drvdata(hid_get_drvdata(hdev),
+				    &appleals_hid_driver);
+
+	iio_device_unregister(als_dev->iio_dev);
+
+	iio_trigger_unregister(als_dev->iio_trig);
+	iio_trigger_free(als_dev->iio_trig);
+
+	iio_triggered_buffer_cleanup(als_dev->iio_dev);
+	iio_device_free(als_dev->iio_dev);
+
+	als_dev->hid_dev = NULL;
+}
+
 #ifdef CONFIG_PM
 static int appleals_reset_resume(struct hid_device *hdev)
 {
@@ -615,6 +655,7 @@ static struct hid_driver appleals_hid_driver = {
 	.name = "apple-ib-als",
 	.id_table = appleals_hid_ids,
 	.probe = appleals_probe,
+        .remove = appleals_remove,
 	.event = appleals_hid_event,
 #ifdef CONFIG_PM
 	.reset_resume = appleals_reset_resume,
